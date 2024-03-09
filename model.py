@@ -1,4 +1,5 @@
 import pandas as pd
+import requests
 import pathlib
 from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import train_test_split
@@ -11,32 +12,35 @@ from sklearn.metrics import r2_score
 import numpy as np
 
 
-gw_data = pathlib.Path.cwd() / 'data' / '2023-24' / 'gws' / 'merged_gw.csv'
+gw_data = pathlib.Path.cwd().parent / 'data' / '2023-24' / 'gws' / 'merged_gw.csv'
 df = pd.read_csv(gw_data)
 
 features = ['position_encoded',
             # home away factors
             'was_home', 'diff_ratio',
             # historical point factors
-            'avg_ppm', 'sd_ppm', 'avg_ppg', 'sd_ppg',
+            # 'avg_ppm', 'sd_ppm',
+            'avg_ppg', 'sd_ppg',
             # historical goal factors
-            'avg_goals', 'sd_goals',
+            # 'avg_goals', 'sd_goals',
             # historical assist factors
-            'avg_assists', 'sd_assists',
+            # 'avg_assists', 'sd_assists',
             # historical clean sheet factors
             'avg_cs', 'sd_cs',
             # historical goal conceded factors
             'avg_gc', 'sd_gc',
             # historical penalty save factors
-            'avg_ps', 'sd_ps',
+            # 'avg_ps', 'sd_ps',
             # historical penalty miss factors
-            'avg_pm', 'sd_pm',
+            # 'avg_pm', 'sd_pm',
             # historical save factors
             'avg_saves', 'sd_saves',
             # ict index factors
-            'influence', 'creativity', 'threat',
+            'influence', 'creativity', 'threat', 'ict_index',
             # forecasted factors
             'expected_assists', 'expected_goal_involvements', 'expected_goals', 'expected_goals_conceded',
+            # price
+            'value',
             # prediction
             'total_points']
 
@@ -52,8 +56,8 @@ df['ppm'].fillna(0, inplace=True)
 
 # start calculating mean and std dev of previous games
 df = df.sort_values(by=['name', 'GW'])
-df['avg_ppm'] = df.groupby('name')['ppm'].apply(lambda x: x.shift().expanding().mean()).reset_index(level=0, drop=True)
-df['sd_ppm'] = df.groupby('name')['ppm'].apply(lambda x: x.shift().expanding().std()).reset_index(level=0, drop=True)
+# df['avg_ppm'] = df.groupby('name')['ppm'].apply(lambda x: x.shift().expanding().mean()).reset_index(level=0, drop=True)
+# df['sd_ppm'] = df.groupby('name')['ppm'].apply(lambda x: x.shift().expanding().std()).reset_index(level=0, drop=True)
 df['avg_ppg'] = df.groupby('name')['total_points'].apply(lambda x: x.shift().expanding().mean()).reset_index(level=0, drop=True)
 df['sd_ppg'] = df.groupby('name')['total_points'].apply(lambda x: x.shift().expanding().std()).reset_index(level=0, drop=True)
 df['avg_cs'] = df.groupby('name')['clean_sheets'].apply(lambda x: x.shift().expanding().mean()).reset_index(level=0, drop=True)
@@ -70,6 +74,11 @@ df['avg_pm'] = df.groupby('name')['penalties_missed'].apply(lambda x: x.shift().
 df['sd_pm'] = df.groupby('name')['penalties_missed'].apply(lambda x: x.shift().expanding().std()).reset_index(level=0, drop=True)
 df['avg_saves'] = df.groupby('name')['saves'].apply(lambda x: x.shift().expanding().mean()).reset_index(level=0, drop=True)
 df['sd_saves'] = df.groupby('name')['saves'].apply(lambda x: x.shift().expanding().std()).reset_index(level=0, drop=True)
+
+# filter away outlier data -> not successful but MID scores are slightly better (1%)
+# df['total_minutes'] = df.groupby('name')['minutes'].apply(lambda x: x.shift().expanding().sum()).reset_index(level=0, drop=True)
+# df = df[df['total_minutes'] > 1200]
+# print(df[['name', 'total_minutes']].tail(30))
 
 le = LabelEncoder()
 df['position_encoded'] = le.fit_transform(df['position'])
@@ -127,7 +136,7 @@ for p in pos:
         'max_depth': [3],
         'learning_rate': [0.01, 0.02, 0.03]
     }
-    grid_search = GridSearchCV(model, param_grid, cv=5, scoring='r2', verbose=2)
+    grid_search = GridSearchCV(model, param_grid, cv=5, scoring='neg_mean_squared_error', verbose=1)
     grid_search.fit(X_train, y_train)
     print(f'Best Parameters: {grid_search.best_params_}')
     print(f'Best Score: {grid_search.best_score_}')
@@ -143,8 +152,30 @@ for p in pos:
     print('')
 
 print(models)
+print('')
 
 # calculate points for current week players
+GAMEWEEK = 28
+# Have to run this before they update the data each week
+url = "https://fantasy.premierleague.com/api/bootstrap-static/"
+response = requests.get(url)
+general_data = response.json()
+players = general_data['elements']
+players = [x for x in players if x['chance_of_playing_next_round'] != 0 and x['chance_of_playing_next_round'] != None]
+# players = [x for x in players if x['chance_of_playing_this_round'] != 0 and x['chance_of_playing_this_round'] != None]
+players = [x['id'] for x in players]
+print(f"{len(players)} players have a chance to play in week {GAMEWEEK}")
+print("")
+
+url = "https://fantasy.premierleague.com/api/fixtures/"
+response = requests.get(url)
+fixture_data = response.json()
+fixture_data = [x for x in fixture_data if x['event'] == GAMEWEEK]
+print("1 is easy fixture, 5 is difficult fixture")
+for i in range(len(fixture_data)):
+    fixture_data[i]['team_a'] = general_data['teams'][fixture_data[i]['team_a']-1]['name']
+    fixture_data[i]['team_h'] = general_data['teams'][fixture_data[i]['team_h']-1]['name']
+    print(f"{fixture_data[i]['team_h']}, {fixture_data[i]['team_h_difficulty']} vs {fixture_data[i]['team_a']}, {fixture_data[i]['team_a_difficulty']}, {fixture_data[i]['kickoff_time']}")
 
 # use algo to determine best starting 11
 
